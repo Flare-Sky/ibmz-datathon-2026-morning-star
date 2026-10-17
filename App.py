@@ -5,8 +5,6 @@ import pandas as pd
 import requests
 import streamlit as st
 
-DEFAULT_API_URL = "http://127.0.0.1:8765/audit"
-
 STATUS_LABELS = {
     "vulnerable": "🔴 Vulnerable",
     "review": "🟠 Review",
@@ -18,6 +16,9 @@ st.set_page_config(
     page_icon="⭐",
     layout="wide",
 )
+
+API_URL = st.secrets["LINUXONE_API_URL"]
+API_TOKEN = st.secrets["LINUXONE_API_TOKEN"]
 
 # ---------- Styling ----------
 st.markdown(
@@ -65,12 +66,21 @@ st.markdown(
 
 
 # ---------- Backend call ----------
-def audit_on_linuxone(api_url, source_code, filename):
+
+def audit_on_linuxone(source_code, filename):
     response = requests.post(
-        api_url,
-        json={"filename": filename, "source": source_code},
-        timeout=30,
+        API_URL,
+        json={
+            "filename": filename,
+            "source": source_code,
+        },
+        headers={
+            "Authorization": f"Bearer {API_TOKEN}",
+            "serveo-skip-browser-warning": "true",
+        },
+        timeout=(10, 30),
     )
+
     response.raise_for_status()
     return response.json()
 
@@ -78,7 +88,6 @@ def audit_on_linuxone(api_url, source_code, filename):
 # ---------- Sidebar ----------
 with st.sidebar:
     st.header("⚙️ Settings")
-    api_url = st.text_input("LinuxONE API endpoint", value=DEFAULT_API_URL)
     st.divider()
     st.subheader("How it works")
     st.markdown(
@@ -122,7 +131,7 @@ if run and uploaded_file is not None:
         with st.spinner("Analyzing on IBM LinuxONE..."):
             start_time = time.perf_counter()
             st.session_state["report"] = audit_on_linuxone(
-                api_url, source, uploaded_file.name
+                source, uploaded_file.name
             )
             st.session_state["elapsed_ms"] = (time.perf_counter() - start_time) * 1000
             st.session_state["report_file"] = uploaded_file.name
