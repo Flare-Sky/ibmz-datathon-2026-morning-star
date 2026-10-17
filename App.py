@@ -1,57 +1,72 @@
-import pandas as pd
+
 import streamlit as st
+import requests
 
-from scanner.detect import scan_python
+st.title("Morning Star — Q-Safe Crypto Auditor")
 
-st.set_page_config(page_title="Quantum-Vulnerability Scanner", layout="wide")
-st.title("Python Crypto Scanner")
-st.caption("Upload Python files to find cryptography usage that may be vulnerable to quantum attacks.")
+def audit_on_linuxone(source_code, filename):
+    response = requests.post(
+        "http://127.0.0.1:8765/audit",
+        json={"filename": filename, "source": source_code},
+        timeout=30
+    )
+    response.raise_for_status()
+    return response.json()
 
-uploaded_files = st.file_uploader(
-    "Upload Python files", type=["py"], accept_multiple_files=True
+uploaded_file = st.file_uploader(
+    "Upload Python source code",
+    type=["py"]
 )
 
-if uploaded_files:
-    all_findings = []
+if st.button("Run Quantum-Safe Audit",
+             disabled=uploaded_file is None):
 
-    for uploaded in uploaded_files:
-        source = uploaded.getvalue().decode("utf-8", errors="replace")
+    try:
+        source = uploaded_file.getvalue().decode("utf-8")
 
-        try:
-            result = scan_python(source, uploaded.name)
-        except SyntaxError as e:
-            st.error(f"{uploaded.name}: could not parse (line {e.lineno}: {e.msg})")
-            continue
+        with st.spinner("Analyzing on IBM LinuxONE..."):
+            report = audit_on_linuxone(
+                source,
+                uploaded_file.name
+            )
 
-        all_findings.extend(result["findings"])
+        st.success("Audit completed on IBM LinuxONE")
 
-        with st.expander(f"View source: {uploaded.name}"):
-            st.code(source, language="python", line_numbers=True)
+        findings = report.get("findings", [])
+        candidates = report.get("ai_candidates", [])
 
-    st.subheader("Results")
+        col1, col2 = st.columns(2)
+        col1.metric("Rule Findings", len(findings))
+        col2.metric("AI Candidates", len(candidates))
 
-    if not all_findings:
-        st.success("No cryptographic usage found by the current rules.")
-    else:
-        df = pd.DataFrame(all_findings)
+        st.subheader("Rule-Based Findings")
+        if findings:
+            st.dataframe(findings, use_container_width=True)
+        else:
+            st.info("No known crypto API matches found.")
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total findings", len(df))
-        col2.metric("Vulnerable", int((df["quantum_status"] == "vulnerable").sum()))
-        col3.metric("Needs review", int((df["quantum_status"] == "review").sum()))
+        st.subheader("AI Classification")
+        if candidates:
+            for item in candidates:
+                st.write(
+                    f"**Line {item['line']} — "
+                    f"{item['evidence']}**"
+                )
+                st.write("Prediction:", item["ai_label"])
+                st.write(
+                    "Model probability:",
+                    f"{item['ai_probability']:.1%}"
+                )
+                st.warning("Requires human review")
+        else:
+            st.info("No AI candidates found.")
 
-        status_filter = st.multiselect(
-            "Filter by status",
-            options=sorted(df["quantum_status"].unique()),
-            default=sorted(df["quantum_status"].unique()),
-        )
-        filtered = df[df["quantum_status"].isin(status_filter)]
+        with st.expander("Full JSON Audit Report"):
+            st.json(report)
 
-        st.dataframe(filtered, use_container_width=True, hide_index=True)
-
-        st.download_button(
-            "Download results (CSV)",
-            filtered.to_csv(index=False),
-            file_name="scan_results.csv",
-            mime="text/csv",
-        )
+    except UnicodeDecodeError:
+        st.error("Please upload a UTF-8 encoded Python file.")
+    except requests.RequestException as e:
+        st.error(f"LinuxONE API connection failed: {e}")
+    except (KeyError, ValueError) as e:
+        st.error(f"Unexpected API response: {e}")
