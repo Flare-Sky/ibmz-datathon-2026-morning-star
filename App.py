@@ -496,14 +496,14 @@ def render_auditor():
         m1.metric("Rule findings", len(findings))
         m2.metric("🔴 Verified API matches", vulnerable)
         m3.metric("🟠 Needs review", review)
-        m4.metric("🤖 AI candidates", len(candidates))
+        m4.metric("⚙️ AI candidates", len(candidates))
         m5.metric("🚨 P1 Planning", f"{p1_urgent} (Max score: {max_risk}/100)")
 
         tab_plan, tab_rules, tab_ai, tab_json = st.tabs(
             [
                 "🗺️ Prioritized Migration Plan",
                 "📋 Rule-Based Findings",
-                "🤖 AI Classification",
+                "⚙️ AI Classification",
                 "🧾 Raw Report",
             ]
         )
