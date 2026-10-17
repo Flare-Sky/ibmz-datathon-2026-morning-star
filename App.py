@@ -1,3 +1,6 @@
+import platform
+import time
+
 import pandas as pd
 import requests
 import streamlit as st
@@ -117,9 +120,11 @@ if run and uploaded_file is not None:
         source = uploaded_file.getvalue().decode("utf-8")
 
         with st.spinner("Analyzing on IBM LinuxONE..."):
+            start_time = time.perf_counter()
             st.session_state["report"] = audit_on_linuxone(
                 api_url, source, uploaded_file.name
             )
+            st.session_state["elapsed_ms"] = (time.perf_counter() - start_time) * 1000
             st.session_state["report_file"] = uploaded_file.name
 
     except UnicodeDecodeError:
@@ -142,9 +147,13 @@ if report:
     vulnerable = sum(1 for f in findings if f.get("quantum_status") == "vulnerable")
     review = sum(1 for f in findings if f.get("quantum_status") == "review")
 
+    elapsed_ms = st.session_state.get("elapsed_ms", 0.0)
+
     st.success(
-        f"Audit of **{st.session_state.get('report_file', 'file')}** "
-        "completed on IBM LinuxONE"
+        f"Audit completed on IBM LinuxONE | "
+        f"Arch: `{platform.machine()}` | "
+        f"Node: `{platform.node()}` | "
+        f"Inference Time: `{elapsed_ms:.1f} ms`"
     )
 
     m1, m2, m3, m4 = st.columns(4)
