@@ -183,8 +183,8 @@ def render_home():
             st.markdown('<span class="step-num">2</span>', unsafe_allow_html=True)
             st.markdown("**Audit your code**")
             st.caption(
-                "Upload a Python file. Rules match known crypto APIs and an AI "
-                "model on IBM LinuxONE flags uncertain calls."
+                "Upload one or more Python files. Rules match known crypto APIs "
+                "and an AI model on IBM LinuxONE flags uncertain calls."
             )
     with s3:
         with st.container(border=True):
@@ -242,8 +242,8 @@ def render_how():
         ),
         (
             "2. Upload and parse",
-            "Your `.py` file is sent to the IBM LinuxONE backend and parsed "
-            "into a syntax tree. The code is **never executed**.",
+            "Your `.py` files are sent to the IBM LinuxONE backend one at a time "
+            "and parsed into syntax trees. The code is **never executed**.",
         ),
         (
             "3. Rule-based detection",
@@ -403,58 +403,115 @@ def render_auditor():
     left, right = st.columns([3, 1], vertical_alignment="bottom")
 
     with left:
-        uploaded_file = st.file_uploader("Upload Python source code", type=["py"])
+        uploaded_files = st.file_uploader(
+            "Upload Python source code (one or more files)",
+            type=["py"],
+            accept_multiple_files=True,
+        )
 
     with right:
+        n_files = len(uploaded_files) if uploaded_files else 0
         run = st.button(
-            "🔍 Run Quantum-Safe Audit",
-            disabled=uploaded_file is None,
+            "🔍 Run Quantum-Safe Audit"
+            + (f" ({n_files} files)" if n_files > 1 else ""),
+            disabled=not uploaded_files,
             type="primary",
             use_container_width=True,
         )
 
-    if uploaded_file is not None:
-        with st.expander(f"Preview: {uploaded_file.name}"):
-            st.code(
-                uploaded_file.getvalue().decode("utf-8", errors="replace"),
-                language="python",
-                line_numbers=True,
-            )
+    if uploaded_files:
+        for f in uploaded_files:
+            with st.expander(f"Preview: {f.name}"):
+                st.code(
+                    f.getvalue().decode("utf-8", errors="replace"),
+                    language="python",
+                    line_numbers=True,
+                )
 
-    if uploaded_file is None:
+    current_hash = None
+    if not uploaded_files:
         st.session_state.pop("report", None)
         st.session_state.pop("report_hash", None)
+        st.session_state.pop("report_errors", None)
     else:
-        current_hash = hashlib.sha256(
-            uploaded_file.name.encode("utf-8") + b"\0" + uploaded_file.getvalue()
-        ).hexdigest()
+        hasher = hashlib.sha256()
+        for f in uploaded_files:
+            hasher.update(f.name.encode("utf-8") + b"\0" + f.getvalue() + b"\0")
+        current_hash = hasher.hexdigest()
         if st.session_state.get("report_hash") != current_hash:
             st.session_state.pop("report", None)
+            st.session_state.pop("report_errors", None)
 
     # ---------- Run audit ----------
-    if run and uploaded_file is not None:
-        try:
-            source = uploaded_file.getvalue().decode("utf-8")
+    if run and uploaded_files:
+        merged_findings = []
+        merged_candidates = []
+        per_file_reports = {}
+        errors = []
+        arch = None
+        total = len(uploaded_files)
 
-            with st.spinner("Analyzing on IBM LinuxONE (s390x)..."):
-                start_time = time.perf_counter()
+        progress = st.progress(0.0, text="Starting audit...")
+        start_time = time.perf_counter()
 
-                report = audit_on_linuxone(source, uploaded_file.name)
+        for i, f in enumerate(uploaded_files):
+            progress.progress(
+                i / total,
+                text=f"Analyzing {f.name} ({i + 1}/{total}) on IBM LinuxONE (s390x)...",
+            )
 
-                st.session_state["report"] = report
-                st.session_state["elapsed_ms"] = (time.perf_counter() - start_time) * 1000
-                st.session_state["report_file"] = uploaded_file.name
-                st.session_state["report_hash"] = current_hash
+            # Unique label so two files with the same name don't collide
+            label = f.name
+            n = 2
+            while label in per_file_reports:
+                label = f"{f.name} ({n})"
+                n += 1
 
-        except UnicodeDecodeError:
+            try:
+                source = f.getvalue().decode("utf-8")
+                file_report = audit_on_linuxone(source, f.name)
+
+                file_findings = file_report.get("findings", [])
+                file_candidates = file_report.get("ai_candidates", [])
+                for item in file_findings + file_candidates:
+                    item["file"] = label
+
+                merged_findings.extend(file_findings)
+                merged_candidates.extend(file_candidates)
+                per_file_reports[label] = file_report
+                arch = arch or file_report.get("inference_arch") or file_report.get("arch")
+
+            except UnicodeDecodeError:
+                errors.append(f"{f.name}: not a UTF-8 encoded Python file.")
+            except requests.ConnectionError as e:
+                errors.append(
+                    f"{f.name}: LinuxONE API connection failed: {e}. "
+                    "Remaining files were skipped."
+                )
+                break
+            except requests.RequestException as e:
+                errors.append(f"{f.name}: LinuxONE API request failed: {e}")
+            except (KeyError, ValueError, AttributeError, TypeError) as e:
+                errors.append(f"{f.name}: unexpected API response: {e}")
+
+        progress.empty()
+
+        if per_file_reports:
+            st.session_state["report"] = {
+                "files": list(per_file_reports.keys()),
+                "findings": merged_findings,
+                "ai_candidates": merged_candidates,
+                "inference_arch": arch,
+                "per_file_reports": per_file_reports,
+            }
+            st.session_state["elapsed_ms"] = (time.perf_counter() - start_time) * 1000
+            st.session_state["report_hash"] = current_hash
+            st.session_state["report_errors"] = errors
+        else:
             st.session_state.pop("report", None)
-            st.error("Please upload a UTF-8 encoded Python file.")
-        except requests.RequestException as e:
-            st.session_state.pop("report", None)
-            st.error(f"LinuxONE API connection failed: {e}")
-        except (KeyError, ValueError) as e:
-            st.session_state.pop("report", None)
-            st.error(f"Unexpected API response: {e}")
+            st.session_state.pop("report_errors", None)
+            for msg in errors:
+                st.error(msg)
 
     # ---------- Results ----------
     report = st.session_state.get("report")
@@ -462,9 +519,25 @@ def render_auditor():
     if report:
         findings = report.get("findings", [])
         candidates = report.get("ai_candidates", [])
+        audited_files = report.get("files", [])
 
-        # Build dynamic migration plan using current business context
-        migration_plan, recommendations, roadmap_stages = build_migration_plan(
+        # Build the migration plan per file (so rows know which file they came
+        # from), then merge and sort by score.
+        migration_plan = []
+        recommendations = []
+        for name in audited_files:
+            f_findings = [x for x in findings if x.get("file") == name]
+            f_candidates = [x for x in candidates if x.get("file") == name]
+            plan_i, recs_i, _ = build_migration_plan(
+                f_findings, f_candidates, business_context
+            )
+            migration_plan.extend({"File": name, **row} for row in plan_i)
+            recommendations.extend({**rec, "file": name} for rec in recs_i)
+
+        migration_plan.sort(key=lambda r: r.get("Planning Score", 0), reverse=True)
+
+        # Roadmap stages are built from everything combined
+        _, _, roadmap_stages = build_migration_plan(
             findings, candidates, business_context
         )
 
@@ -485,12 +558,15 @@ def render_auditor():
         max_risk = max((r["Planning Score"] for r in migration_plan), default=0)
 
         elapsed_ms = st.session_state.get("elapsed_ms", 0.0)
-        reported_arch = report.get("inference_arch") or report.get("arch")
+        reported_arch = report.get("inference_arch")
         arch_detail = f" (`{reported_arch}`)" if reported_arch else ""
+        file_word = "file" if len(audited_files) == 1 else "files"
         st.success(
-            f"Audit completed via IBM LinuxONE backend{arch_detail} | "
+            f"Audited {len(audited_files)} {file_word} via IBM LinuxONE backend{arch_detail} | "
             f"End-to-end response time: {elapsed_ms:.1f} ms"
         )
+        for msg in st.session_state.get("report_errors", []):
+            st.warning(msg)
 
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Rule findings", len(findings))
@@ -524,11 +600,14 @@ def render_auditor():
             )
             if migration_plan:
                 df_plan = pd.DataFrame(migration_plan)
+                plan_cols = ["File"] + [c for c in df_plan.columns if c != "File"]
+                df_plan = df_plan[plan_cols]
                 st.dataframe(
                     df_plan,
                     use_container_width=True,
                     hide_index=True,
                     column_config={
+                        "File": st.column_config.TextColumn("File", width="medium"),
                         "Priority Tier": st.column_config.TextColumn("Priority Tier", width="medium"),
                         "Planning Score": st.column_config.ProgressColumn(
                             "Heuristic Priority Score",
@@ -563,7 +642,7 @@ def render_auditor():
                     heading = (
                         f"{item.get('priority', 'Review')} — "
                         f"{item.get('algorithm', 'Unverified API')} "
-                        f"(line {item.get('line', '?')})"
+                        f"({item.get('file', 'file')}, line {item.get('line', '?')})"
                     )
                     with st.expander(heading):
                         st.write("**Why:**", item.get("why", ""))
@@ -589,8 +668,8 @@ def render_auditor():
                     )
 
                 preferred = [
-                    "line", "algorithm", "quantum_status", "usage",
-                    "key_size", "confidence", "evidence", "file",
+                    "file", "line", "algorithm", "quantum_status", "usage",
+                    "key_size", "confidence", "evidence",
                 ]
                 cols = [c for c in preferred if c in df.columns]
                 cols += [c for c in df.columns if c not in cols]
@@ -600,6 +679,7 @@ def render_auditor():
                     use_container_width=True,
                     hide_index=True,
                     column_config={
+                        "file": "File",
                         "line": st.column_config.NumberColumn("Line", width="small"),
                         "algorithm": "Algorithm",
                         "quantum_status": "Quantum status",
@@ -607,7 +687,6 @@ def render_auditor():
                         "key_size": st.column_config.NumberColumn("Key size"),
                         "confidence": "Confidence",
                         "evidence": st.column_config.TextColumn("Evidence", width="large"),
-                        "file": "File",
                     },
                 )
 
@@ -633,8 +712,8 @@ def render_auditor():
                         top, bottom = st.columns([3, 2], vertical_alignment="center")
                         with top:
                             st.markdown(
-                                f"**Line {item.get('line', '?')}** &nbsp;·&nbsp; "
-                                f"`{item.get('evidence', '')}`"
+                                f"**{item.get('file', 'file')} · Line {item.get('line', '?')}** "
+                                f"&nbsp;·&nbsp; `{item.get('evidence', '')}`"
                             )
                             prediction = item.get("ai_label", "unknown")
                             if item.get("ai_class") == 0:
@@ -670,7 +749,7 @@ def render_auditor():
                 mime="application/json",
             )
     else:
-        st.info("Select your organization context, upload a Python file, and click **Run Quantum-Safe Audit** to begin.")
+        st.info("Select your organization context, upload one or more Python files, and click **Run Quantum-Safe Audit** to begin.")
 
 
 # =====================================================================
@@ -687,7 +766,7 @@ with st.sidebar:
         st.markdown(
             """
             1. Select **Organization Risk Context**
-            2. Upload a `.py` file
+            2. Upload one or more `.py` files
             3. Rules match known crypto APIs
             4. AI model on **IBM LinuxONE** flags uncertain calls
             5. Review your **Prioritized NIST Migration Plan**
