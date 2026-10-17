@@ -7,5 +7,6 @@ This project allows the user to upload a Python file and use AI running on the L
 - ML-KEM
 - ML-DSA
 
-# Frontend: Streamlit
-# Backend: LinuxONE
+Frontend: Streamlit
+
+Backend: LinuxONE
