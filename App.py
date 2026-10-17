@@ -1,6 +1,5 @@
-import platform
 import time
-
+import hashlib
 import pandas as pd
 import requests
 import streamlit as st
@@ -76,13 +75,14 @@ def audit_on_linuxone(source_code, filename):
         },
         headers={
             "Authorization": f"Bearer {API_TOKEN}",
-            "serveo-skip-browser-warning": "true",
+            "ngrok-skip-browser-warning": "true",
         },
         timeout=(10, 30),
     )
 
     response.raise_for_status()
     return response.json()
+
 
 
 # ---------- Sidebar ----------
@@ -123,6 +123,17 @@ if uploaded_file is not None:
             line_numbers=True,
         )
 
+if uploaded_file is None:
+    st.session_state.pop("report", None)
+    st.session_state.pop("report_hash", None)
+else:
+    current_hash = hashlib.sha256(
+        uploaded_file.getvalue()
+    ).hexdigest()
+
+    if st.session_state.get("report_hash") != current_hash:
+        st.session_state.pop("report", None)
+
 # ---------- Run audit ----------
 if run and uploaded_file is not None:
     try:
@@ -130,11 +141,17 @@ if run and uploaded_file is not None:
 
         with st.spinner("Analyzing on IBM LinuxONE..."):
             start_time = time.perf_counter()
-            st.session_state["report"] = audit_on_linuxone(
+
+            report = audit_on_linuxone(
                 source, uploaded_file.name
             )
-            st.session_state["elapsed_ms"] = (time.perf_counter() - start_time) * 1000
+
+            st.session_state["report"] = report
+            st.session_state["elapsed_ms"] = (
+                time.perf_counter() - start_time
+            ) * 1000
             st.session_state["report_file"] = uploaded_file.name
+            st.session_state["report_hash"] = current_hash
 
     except UnicodeDecodeError:
         st.session_state.pop("report", None)
@@ -154,15 +171,22 @@ if report:
     candidates = report.get("ai_candidates", [])
 
     vulnerable = sum(1 for f in findings if f.get("quantum_status") == "vulnerable")
-    review = sum(1 for f in findings if f.get("quantum_status") == "review")
+    review = (
+        sum(
+            1 for f in findings
+            if f.get("quantum_status") == "review"
+        )
+        + sum(
+            1 for c in candidates
+            if c.get("needs_human_review")
+        )
+    )
 
     elapsed_ms = st.session_state.get("elapsed_ms", 0.0)
 
     st.success(
-        f"Audit completed on IBM LinuxONE | "
-        f"Arch: `{platform.machine()}` | "
-        f"Node: `{platform.node()}` | "
-        f"Inference Time: `{elapsed_ms:.1f} ms`"
+        f"Audit completed via IBM LinuxONE backend | "
+        f"End-to-end response time: {elapsed_ms:.1f} ms"
     )
 
     m1, m2, m3, m4 = st.columns(4)
