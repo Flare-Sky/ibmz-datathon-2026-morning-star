@@ -1,153 +1,215 @@
-# Morning Star — Quantum-Safe Crypto Auditor
+# Morning Star — Quantum-Safe Crypto Auditor & Migration Planner
 
-Morning Star is a static-analysis prototype for finding cryptographic API usage in Python source code. It combines deterministic AST rules with an optional machine-learning classifier hosted on IBM LinuxONE, then presents the results through a command-line interface or a Streamlit web app.
+**IBM Z Datathon 2026 · Team Morning Star**
 
-The scanner parses uploaded code but does **not** execute it.
+**Discover cryptographic exposure today. Prioritize a quantum-safe tomorrow.**
+
+Morning Star helps schools, nonprofits, and small IT teams identify potential quantum-vulnerable cryptography in Python source code and plan an explainable, business-aware migration. It combines an AST-based rule scanner, a three-class machine-learning model running on **IBM LinuxONE (s390x)**, and a Streamlit interface that generates review guidance and prioritized migration planning outputs.
+
+**Live demonstration:** [Morning Star Streamlit app](https://ibmz-datathon-2026-morning-star1.streamlit.app/)
 
 > [!IMPORTANT]
-> This project supports code review; it does not prove that code is secure or insecure. Rule matches identify known API usage, while all ML predictions are unverified suggestions that require human review.
+> **Prototype / human review required.** Morning Star does **not** establish whether an application is secure, whether a cryptographic implementation complies with NIST standards, or whether a migration is complete. It identifies recognized API usage and unverified ML candidates, then provides preliminary planning recommendations. Uploaded Python code is **parsed, never executed** by the scanner.
 
-## What it detects
+## What the app does
 
-The rule-based scanner currently recognizes these Python call patterns:
+1. **Describe your organization.** Select a school, nonprofit, internal test application, or custom profile and adjust data sensitivity, confidentiality retention (1–30 years), business criticality, and migration complexity.
+2. **Upload one or more `.py` files.** The Streamlit app sends each file to the authenticated IBM LinuxONE API for static analysis. Uploading multiple files does not execute or import them.
+3. **Review cryptographic findings.** Known Python call patterns are reported by deterministic AST rules; unmatched crypto-like calls are classified by a three-class machine-learning model and marked for human review.
+4. **Review the migration roadmap.** The Streamlit frontend combines verified rule matches, unverified candidates, and business inputs into illustrative priority tiers, recommended next checks, and a staged migration plan.
+5. **Export results.** Download rule findings and the migration plan as CSV, or download a combined JSON report.
 
-| Algorithm/API | Reported status | Notes |
-| --- | --- | --- |
-| RSA key generation | `vulnerable` | Public-key primitive vulnerable to a sufficiently capable quantum computer |
-| ECC key generation | `vulnerable` | Includes recognized `cryptography` EC key-generation calls |
-| ECDSA | `vulnerable` | Digital-signature usage |
-| ECDH | `vulnerable` | Key-establishment usage |
-| AES-GCM | `review` | Symmetric cryptography; review key size, key management, and surrounding usage |
+The web application includes **Home**, **Run Audit**, **How It Works**, and **NIST Reference** pages.
 
-Calls with crypto-related names that do not match a verified rule—such as a post-quantum `ML-KEM` API—are emitted as candidates. When the optional AI layer is enabled, a three-class model labels each candidate as:
-
-- `possibly_non_crypto_or_comment`
-- `possibly_quantum_vulnerable`
-- `possibly_quantum_resistant`
-
-These labels are hints, not security findings.
-
-## Architecture
+## Architecture and execution boundaries
 
 ```text
-Python source
-     │
-     ▼
-AST rule scanner ──────► verified rule findings
-     │
-     └─ unknown crypto-like calls
-                  │
-                  ▼
-       three-class ML model on LinuxONE
-                  │
-                  ▼
-          human-review candidates
+Browser / Streamlit Cloud (frontend)
+  ├─ Organization profile, heuristic priority scoring, recommendations
+  └─ File upload (one or more .py files)
+           │ HTTPS + bearer token
+           ▼
+        ngrok tunnel
+           │
+           ▼
+   Demonstration Mac SSH port forward
+           │
+           ▼
+IBM LinuxONE / Ubuntu (s390x)
+  └─ Localhost HTTP API :8765
+       ├─ Python AST rule scanner
+       └─ Three-class TF-IDF + Logistic Regression model (v3)
+           │
+           ▼
+       Rule findings + AI candidates (JSON)
+           │
+           ▼
+Streamlit frontend
+  ├─ Explainable review recommendations (deterministic playbooks)
+  ├─ Heuristic business-priority ranking and staged roadmap
+  └─ CSV / JSON exports
 ```
 
-The Streamlit frontend sends a Python file to the authenticated LinuxONE API. The API runs the rule scanner and model, then returns rule findings and AI candidates as JSON.
+**Where processing happens:** cryptographic scanning and ML inference run on LinuxONE. The business-context heuristic and remediation playbooks run in Streamlit Cloud. No third-party LLM is used to generate patches or analyze the uploaded code. However, source files traverse Streamlit Cloud and the tunnel infrastructure; **this is not a zero-exposure or on-premises-only architecture**.
 
-## Repository layout
+**Demo availability:** the current public tunnel requires the demonstration Mac, its SSH port forward, and its ngrok session to remain connected. The backend `qsafe-api` service is independently managed with `systemd` on LinuxONE.
+
+## Supported detection
+
+The deterministic scanner currently recognizes the following Python call patterns:
+
+| Rule match | Rule result | Notes |
+| --- | --- | --- |
+| RSA key generation | `vulnerable` | Quantum-vulnerable public-key algorithm; actual key usage must still be determined |
+| Elliptic-curve key generation | `vulnerable` | Includes recognized `cryptography` EC key-generation APIs |
+| ECDSA | `vulnerable` | Traditional elliptic-curve signatures |
+| ECDH | `vulnerable` | Traditional elliptic-curve key agreement |
+| AES-GCM | `review` | Symmetric authenticated encryption; review key length, nonce handling, tag verification, and key management |
+
+An import-resolved, known-library call receives **high rule confidence**; a name-only pattern match receives **low rule confidence** and must be verified. A rule match establishes the occurrence of an API pattern, **not** that an application is exploitable or noncompliant.
+
+Unknown crypto-like calls become **AI candidates**. The three-class v3 model uses:
+
+| Class | v3 interpretation |
+| --- | --- |
+| `0` | Other, out of scope, or unclassified; **not** a security approval |
+| `1` | Possibly quantum-vulnerable traditional asymmetric cryptography |
+| `2` | Possibly post-quantum cryptographic primitive; **not** verified as safe or standards-compliant |
+
+The existing backend API still emits the legacy class-0 string `possibly_non_crypto_or_comment`; the Streamlit UI displays class 0 as `possibly_other_or_unclassified`. **Use `ai_class` (0/1/2) as the canonical class identifier.** All AI candidates have `needs_human_review: true`. Reported ML probabilities are **not calibrated security confidence scores**.
+
+## Business-aware migration planning
+
+The **Prioritized Migration Plan** accounts for business inputs (sensitivity, confidentiality retention, criticality, and estimated migration complexity). The output includes priority tiers, illustrative planning scores, review guidance, indicative windows, and an exportable CSV.
+
+- **Verified, quantum-vulnerable rule patterns** may be placed in high planning tiers, depending on business exposure.
+- **Unverified AI suggestions** and **low-confidence rule matches** are kept in a **VERIFY** category rather than automatically promoted to a confirmed vulnerability.
+- **AES-GCM** triggers configuration and key-management review, **not** a blanket recommendation to replace AES with ML-KEM.
+- The remediation playbooks distinguish **key establishment** (evaluate ML-KEM, NIST FIPS 203) from **digital signatures** (evaluate ML-DSA or SLH-DSA, FIPS 204/205). The scanner cannot reliably infer every key's purpose from key-generation code alone.
+
+**Important qualification:** priority scores (0–100), tier thresholds, and suggested time windows are *project-specific planning heuristics*. They are not NIST ratings, quantified breach probabilities, regulatory deadlines, validated cost estimates, or a complete implementation of Mosca's inequality. The current version is **budget-aware in prioritization**, but it does not calculate an actual dollar budget or return automatically applicable code patches.
+
+## v3 model: training and evaluation
+
+The deployed LinuxONE model is `crypto_classifier_v3.joblib`, a three-class **TF-IDF (word/character features) + Logistic Regression** classifier. It was trained on LinuxONE with **124 synthetic labeled examples**:
+
+| Label | Training examples |
+| --- | ---: |
+| Class 0 — other / unclassified | 42 |
+| Class 1 — possibly quantum-vulnerable asymmetric | 42 |
+| Class 2 — possibly post-quantum primitive | 40 |
+
+**LinuxONE evaluation (October 17, 2026; saved in `evaluation/crypto_classifier_v3_evaluation.json`):**
+
+| Evaluation set | Examples | Accuracy | Macro F1 | Interpretation |
+| --- | ---: | ---: | ---: | --- |
+| Synthetic holdout | 30 | 100% (30/30) | 1.00 | Same general synthetic task distribution; not a production benchmark |
+| v2 development regression | 8 | 100% (8/8) | 1.00 | Rechecks previously observed v2 misclassifications; development set |
+| Out-of-family synthetic stress | 12 | 75% (9/12) | 0.74 | Exposes generalization limitations |
+
+The out-of-family stress evaluation recorded three errors:
+
+```text
+Class 0 -> Class 2: pqcrypto.kem.ml_kem_768.get_version()
+Class 0 -> Class 2: oqs.Signature('not-a-real-algorithm')
+Class 1 -> Class 0: ecies.encrypt(remote_public_key, plaintext)
+```
+
+These examples show that the model does **not** authenticate the existence or standards compliance of PQC APIs and can miss less familiar cryptographic libraries. The 100% synthetic holdout result should **not** be described as real-world model accuracy. More diverse, independently sourced code examples and library-family-separated testing are necessary before operational use.
+
+**Reproducibility:** the repository includes `train_model_v3.py` (with its synthetic training, holdout, regression, and stress examples defined in the script) and `evaluation/crypto_classifier_v3_evaluation.json` (the LinuxONE evaluation output). The trained `.joblib` binary is **not** tracked. Results can be reproduced by running the script with compatible versions of scikit-learn and its dependencies on LinuxONE. Exact dependency versions are not pinned, so bit-for-bit identical model files are not guaranteed. `train_model_v2.py` is historical prototype code and does not reproduce v3.
+
+To regenerate **a new** v3 artifact without overwriting the deployed model:
+
+```bash
+/usr/bin/python3 train_model_v3.py \
+  --output /home/linux1/models/crypto_classifier_v3_reproduced.joblib \
+  --report /home/linux1/models/crypto_classifier_v3_reproduced_evaluation.json
+```
+
+Compare the resulting evaluation JSON against the committed report. Never replace a running model without independent testing and an explicit deployment step.
+
+## Repository contents (after this documentation and evidence update)
 
 ```text
 .
-├── App.py                  # Streamlit frontend
-├── linuxone_api_server.py  # Authenticated local-only HTTP API
-├── run_scan.py             # Single-file rule-scanner example
-├── run_project.py          # Directory rule scanner
-├── run_ai_audit.py         # File/directory rule + AI CLI
-├── scanner/                # AST detection and project traversal
-├── ai/                     # Model loading and audit integration
-├── samples/                # Static-analysis examples; do not execute ai_demo.py
-├── tests/                  # unittest test suite
-└── data/                   # Demonstration training data
+├── App.py                      # Streamlit multipage frontend
+├── linuxone_api_server.py      # Authenticated LinuxONE-only audit API
+├── run_ai_audit.py             # AI + rules CLI (single file supported by this checkout)
+├── train_model_v2.py           # Historical 3-class training prototype
+├── train_model_v3.py           # Three-class training + synthetic evaluation data
+├── evaluation/
+│   └── crypto_classifier_v3_evaluation.json  # LinuxONE evaluation evidence
+├── ai/
+│   ├── audit.py                # Classification and rule integration
+│   ├── classifier.py           # Trusted joblib model loader
+│   ├── remediation.py          # Deterministic migration playbooks
+│   └── business_priority.py    # Business-context planning heuristic
+├── scanner/
+│   └── detect.py               # AST-based single-source scanner
+├── samples/
+│   └── ai_demo.py              # Sample source for static analysis
+├── tests/                      # unittest tests (25 currently passing)
+└── requirements.txt           # Streamlit, requests, pandas
 ```
 
-## Requirements
+**Note:** the repository does not include the optional project-directory scanner (`scanner/project.py`, `run_project.py`) or older standalone `run_scan.py`. The **web app supports multiple files** by sending them individually to the LinuxONE API and combining the results; this is separate from a CLI directory traversal feature. The `audit_project()` function in `ai/audit.py` expects `scanner/project.py` and therefore is **not available from a fresh clone of the current `main`**.
 
-- Python 3.9 or newer
-- Streamlit frontend: packages in `requirements.txt`
-- AI inference or training: `joblib` and `scikit-learn`
-- A separately trained three-class model for AI auditing
+## Running the project
 
-No trained model or model weights are included in this repository.
+### 1. Frontend dependencies and unit tests
 
-## Quick start: rule-based scanner
-
-Clone the repository and create a virtual environment:
+Python **3.9+** is required for the AST scanner. In a local clone:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -r requirements.txt
-```
-
-Scan the bundled single-file example:
-
-```bash
-python3 run_scan.py
-```
-
-Scan every Python file under a directory:
-
-```bash
-python3 run_project.py samples
-```
-
-`run_project.py` uses `samples` when no directory is supplied. Project scans skip `.git`, virtual environments, `__pycache__`, and `node_modules`; they scan at most 100 Python files and reject files larger than 1 MB.
-
-## Run the tests
-
-The tests use a fake three-class model, so they do not require scikit-learn or a model artifact:
-
-```bash
 python3 -m unittest discover -s tests -v
 ```
 
-## AI-assisted audit on LinuxONE
+At the October 17 checkpoint, the repository's 25 unit tests passed on the project Mac. Tests cover scanner rules, simulated three-class AI integration, remediation rules, and business priority behavior. **AI unit tests use a fake model** and do not establish the actual v3 model's accuracy.
 
-Install the ML runtime on the LinuxONE environment:
+### 2. LinuxONE model inference
+
+The datathon LinuxONE machine uses Ubuntu 24.04 on `s390x`. On the environment used for the demo, system packages were installed using APT:
 
 ```bash
-/usr/bin/python3 -m pip install joblib scikit-learn
+sudo apt-get update
+sudo apt-get install -y python3-numpy python3-scipy python3-sklearn python3-joblib
 ```
 
-The model supplied to the audit must expose `predict_proba`, and its `classes_` must contain exactly `0`, `1`, and `2`. Only load a trusted model that you generated yourself: loading a `joblib` file can execute code.
+The inference server requires a **trusted, separately created** three-class joblib model. Only load artifacts you control: unpickling a malicious joblib artifact may execute code.
 
-Audit one file:
+Run a local AI-assisted audit on LinuxONE:
 
 ```bash
+cd ~/ibmz-datathon-2026-morning-star
 /usr/bin/python3 run_ai_audit.py samples/ai_demo.py \
-  --model /home/linux1/models/crypto_classifier_v2.joblib
+  --model /home/linux1/models/crypto_classifier_v3.joblib
 ```
 
-Audit a directory:
+The sample file includes intentionally unresolved names. **Do not execute it**; use it strictly as scanner input.
 
-```bash
-/usr/bin/python3 run_ai_audit.py samples \
-  --model /home/linux1/models/crypto_classifier_v2.joblib
-```
+### 3. LinuxONE HTTP API
 
-### Training-script compatibility
-
-`train_model.py` and `data/crypto_training.csv` currently demonstrate a **binary** classifier with labels `0` and `1`. The resulting artifact is not compatible with the three-class AI audit described above. Use a separately trained and validated model whose classes are exactly `[0, 1, 2]`.
-
-## Run the LinuxONE API
-
-The API binds to `127.0.0.1:8765`, accepts source files up to 256 KiB, and protects `POST /audit` with a bearer token.
+The backend binds to `127.0.0.1:8765`, limits POST request bodies to **256 KiB**, and protects `POST /audit` with a bearer token. Its unauthenticated `GET /health` endpoint returns service state and loaded class IDs.
 
 ```bash
 export QSAFE_API_TOKEN='replace-with-a-long-random-token'
-export QSAFE_MODEL_PATH='/home/linux1/models/crypto_classifier_v2.joblib'
+export QSAFE_MODEL_PATH='/home/linux1/models/crypto_classifier_v3.joblib'
 /usr/bin/python3 linuxone_api_server.py
 ```
 
-Check service health:
+For the deployed instance, the token and model path are managed by its LinuxONE `systemd` service configuration. **Do not publish tokens, configuration secrets, or private keys.**
+
+Check LinuxONE local health:
 
 ```bash
 curl http://127.0.0.1:8765/health
 ```
 
-Submit an audit request:
+Example authenticated audit request:
 
 ```bash
 curl -X POST http://127.0.0.1:8765/audit \
@@ -156,58 +218,50 @@ curl -X POST http://127.0.0.1:8765/audit \
   --data '{"filename":"example.py","source":"RSA.generate(2048)"}'
 ```
 
-Keep this service bound to localhost and expose it only through a trusted tunnel or reverse proxy with TLS.
+A missing or incorrect bearer token returns `401`; malformed input returns `400`; oversized POST bodies return `413`. A health response reporting classes `[0,1,2]` does **not** alone prove which model version was loaded; check the actual service environment/model path for that.
 
-## Run the Streamlit frontend
+### 4. Streamlit interface
 
-Create `.streamlit/secrets.toml` locally:
+The hosted demonstration uses Streamlit Community Cloud. For a local development setup, create `.streamlit/secrets.toml` (ignored by Git):
 
 ```toml
-LINUXONE_API_URL = "https://your-secure-endpoint.example/audit"
-LINUXONE_API_TOKEN = "the-same-token-used-by-the-api"
+LINUXONE_API_URL = "https://YOUR_SECURE_ENDPOINT/audit"
+LINUXONE_API_TOKEN = "THE_BACKEND_BEARER_TOKEN"
 ```
-
-The secrets file is ignored by Git and must not be committed. Start the app with:
 
 ```bash
 streamlit run App.py
 ```
 
-Upload a UTF-8 encoded `.py` file, run the audit, and review the rule findings, AI candidates, and raw JSON report. Results can also be downloaded as CSV or JSON.
+The frontend sends its bearer token in the `Authorization` header and uses an ngrok-specific skip-warning header for the present demo tunnel. The deployed Streamlit Cloud app stores secrets in its own deployment settings, not in GitHub.
 
-## Output model
+## Example: expected end-to-end behavior
 
-A successful audit returns an object shaped like this:
+When given this **source text** (not executed):
 
-```json
-{
-  "findings": [
-    {
-      "file": "example.py",
-      "line": 2,
-      "algorithm": "RSA",
-      "usage": "unknown",
-      "quantum_status": "vulnerable",
-      "evidence": "rsa.generate_private_key",
-      "confidence": "high",
-      "key_size": 2048
-    }
-  ],
-  "ai_candidates": [],
-  "summary": {
-    "rule_findings": 1,
-    "ai_candidates_for_review": 0
-  }
-}
+```python
+from cryptography.hazmat.primitives.asymmetric import rsa
+rsa.generate_private_key(public_exponent=65537, key_size=2048)
+RSA.generate(2048)
+oqs.KeyEncapsulation('ML-KEM-768')
+print('RSA is mentioned')
 ```
 
-High-confidence findings are tied to recognized, fully qualified imports. Unqualified name matches are reported with low confidence. Syntax errors and unreadable files are recorded as project-scan errors instead of stopping the whole scan.
+The AST rules produce one RSA finding. Unrecognized RSA and ML-KEM API calls are sent to the model as two **review-required** candidates, while the final string literal is not itself treated as a crypto call. In the LinuxONE v3 CLI test, `RSA.generate(2048)` was classified as class 1 and the ML-KEM call as class 2. This **does not prove** that either call is correctly implemented or secure.
 
-## Security and limitations
+The business profile can change the **planning priority**, but must not change the underlying cryptographic classifications.
 
-- Only Python source is supported.
-- Detection is based on a small rule set and can miss wrappers, aliases created at runtime, indirect calls, and unsupported libraries.
-- A rule match identifies API usage; it does not assess the complete protocol, deployment, or threat model.
-- AI probabilities are model outputs, not calibrated security confidence.
-- Uploaded code is parsed but not executed by the scanner. It is still transmitted to the configured backend, so deploy the frontend, tunnel, API, and logs according to your data-handling requirements.
-- Do not execute `samples/ai_demo.py`; it is input for static analysis and intentionally contains unresolved names.
+## Security, privacy, and limitations
+
+- Source is statically parsed but **not executed**. This does not guarantee the absence of all possible parsing, dependency, or infrastructure vulnerabilities.
+- The tool supports **Python** source only and recognizes a limited set of AST call patterns; dynamic references, unsupported APIs, wrappers, and runtime aliasing may be missed.
+- AI suggestions require human review. **Class 0 is not a safety finding; class 2 is not a NIST-compliance certification.**
+- Planning scores, effort bands, and time windows are illustrative heuristics, not objective risk measurements or project-cost estimates.
+- Current testing consists of prototype unit tests and small synthetic model evaluations, not a comprehensive independent security assessment.
+- Uploaded code travels via the browser, Streamlit Cloud, the HTTPS tunnel and an SSH port forward to LinuxONE. Do not upload confidential source code without an appropriate data-handling review.
+- The current demo tunnel depends on an online Mac and may be unavailable when the tunnel or SSH session stops.
+- No automatic code refactoring or migration is performed; users must verify the proposed cryptographic replacements and test protocol compatibility.
+
+## Project status
+
+**Deployed demo:** IBM LinuxONE v3 inference + authenticated API + Streamlit multi-file frontend + explainable business-priority migration guidance. **Research prototype; human verification required.**
