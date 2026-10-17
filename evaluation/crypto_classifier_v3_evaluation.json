@@ -1,0 +1,104 @@
+{
+  "disclaimer": "Small synthetic datasets. Not calibrated probabilities or real-world security accuracy.",
+  "labels": {
+    "0": "OTHER_OR_UNCLASSIFIED",
+    "1": "POSSIBLY_QUANTUM_VULNERABLE_ASYMMETRIC",
+    "2": "POSSIBLY_POST_QUANTUM_PRIMITIVE"
+  },
+  "train_counts": {
+    "0": 42,
+    "1": 42,
+    "2": 40
+  },
+  "holdout_counts": {
+    "0": 10,
+    "1": 10,
+    "2": 10
+  },
+  "training_data_sha256": "4bb4e7535db83762e664892322233c3fbafba28598cf91801b1f5b996e92d41b",
+  "synthetic_holdout": {
+    "count": 30,
+    "accuracy": 1.0,
+    "confusion_matrix": [
+      [
+        10,
+        0,
+        0
+      ],
+      [
+        0,
+        10,
+        0
+      ],
+      [
+        0,
+        0,
+        10
+      ]
+    ],
+    "errors": []
+  },
+  "v2_development_regression": {
+    "count": 8,
+    "accuracy": 1.0,
+    "confusion_matrix": [
+      [
+        4,
+        0,
+        0
+      ],
+      [
+        0,
+        2,
+        0
+      ],
+      [
+        0,
+        0,
+        2
+      ]
+    ],
+    "errors": []
+  },
+  "out_of_family_synthetic_stress": {
+    "count": 12,
+    "accuracy": 0.75,
+    "confusion_matrix": [
+      [
+        2,
+        0,
+        2
+      ],
+      [
+        1,
+        3,
+        0
+      ],
+      [
+        0,
+        0,
+        4
+      ]
+    ],
+    "errors": [
+      {
+        "expected": 0,
+        "predicted": 2,
+        "probability": 0.8689,
+        "code": "pqcrypto.kem.ml_kem_768.get_version()"
+      },
+      {
+        "expected": 0,
+        "predicted": 2,
+        "probability": 0.8819,
+        "code": "oqs.Signature('not-a-real-algorithm')"
+      },
+      {
+        "expected": 1,
+        "predicted": 0,
+        "probability": 0.6318,
+        "code": "ecies.encrypt(remote_public_key, plaintext)"
+      }
+    ]
+  }
+}
