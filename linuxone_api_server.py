@@ -3,6 +3,7 @@
 Run from the repository root using: /usr/bin/python3 linuxone_api_server.py
 No third-party HTTP server dependency is needed.
 """
+import hmac
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,7 @@ MODEL_PATH = os.environ.get(
 )
 MODEL = load_model(MODEL_PATH)
 MAX_BODY = 256 * 1024
+API_TOKEN = os.environ["QSAFE_API_TOKEN"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -36,31 +38,68 @@ class Handler(BaseHTTPRequestHandler):
             })
         self.send_json(404, {"error": "not_found"})
 
+    
     def do_POST(self):
+        # Only accept audit requests.
         if self.path != "/audit":
-            return self.send_json(404, {"error": "not_found"})
+            return self.send_json(
+                404, {"error": "not_found"}
+            )
+
+        # Authenticate before reading request body.
+        provided = self.headers.get("Authorization", "")
+        expected = f"Bearer {API_TOKEN}"
+
+        if not hmac.compare_digest(provided, expected):
+            return self.send_json(
+                401, {"error": "unauthorized"}
+            )
+
+        # Enforce upload size limit.
         try:
             size = int(self.headers.get("Content-Length", "0"))
         except ValueError:
-            return self.send_json(400, {"error": "invalid_content_length"})
+            return self.send_json(
+                400, {"error": "invalid_content_length"}
+            )
+
         if not 0 < size <= MAX_BODY:
-            return self.send_json(413, {"error": "request_must_be_1_to_262144_bytes"})
+            return self.send_json(
+                413, {"error": "request_too_large_or_empty"}
+            )
+
+        # Parse and audit Python source code.
         try:
             payload = json.loads(self.rfile.read(size))
+
             source = payload["source"]
             filename = payload.get("filename", "uploaded.py")
+
             if not isinstance(source, str) or not isinstance(filename, str):
                 raise ValueError("source and filename must be strings")
+
             if not source or len(filename) > 200:
-                raise ValueError("source must be nonempty and filename <= 200 characters")
+                raise ValueError("Invalid source or filename")
+
             filename = os.path.basename(filename)
             report = audit_source(source, filename, MODEL)
+
         except (ValueError, KeyError, TypeError, UnicodeDecodeError, SyntaxError) as exc:
-            return self.send_json(400, {"error": "invalid_input", "detail": str(exc)[:250]})
+            return self.send_json(
+                400,
+                {
+                    "error": "invalid_input",
+                    "detail": str(exc)[:250]
+                }
+            )
+
         except Exception:
             self.log_exception_safely()
-            return self.send_json(500, {"error": "internal_audit_error"})
-        self.send_json(200, report)
+            return self.send_json(
+                500, {"error": "internal_audit_error"}
+            )
+
+        return self.send_json(200, report)
 
     def log_exception_safely(self):
         import traceback
